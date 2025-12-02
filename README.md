@@ -17,9 +17,9 @@ VisionMax is a Flutter-based assistive application designed to help visually imp
 
 You can view the app interface and functionality through the screenshots below:
 
-![Screenshot 1](screenshots/screen1.png)  
-![Screenshot 2](screenshots/screen2.png)  
-![Screenshot 3](screenshots/screen3.png)  
+![Screenshot 1](screenshots/screen1.jpeg)  
+![Screenshot 2](screenshots/screen2.jpeg)  
+![Screenshot 3](screenshots/screen3.jpeg)  
 
 ---
 
