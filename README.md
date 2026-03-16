@@ -1,4 +1,9 @@
-# VisionMax
+<picture align="center">
+  <source media="(prefers-color-scheme: dark)" srcset=".github/VisionMax_dark.png">
+  <img alt="Vision Max Logo" src=".github/VisionMax_light.png">
+</picture>
+
+---
 
 VisionMax is a Flutter-based assistive application designed to help visually impaired users navigate their surroundings safely. The app uses **Google ML Kit’s Object Detection API** to detect nearby objects and provides **audio and haptic feedback** to guide users.
 
