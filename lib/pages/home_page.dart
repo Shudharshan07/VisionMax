@@ -85,52 +85,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         },
         child: Scaffold(
           backgroundColor: theme.scaffoldBackgroundColor,
-          appBar: isWeb
-              ? null
-              : AppBar(
-                  title: Text(
-                    'Vision - Max',
-                    style: GoogleFonts.poppins(
-                      fontSize: 24,
-                      fontWeight: FontWeight.w600,
-                      color: theme.colorScheme.onPrimary,
-                      letterSpacing: 2,
-                    ),
-                  ),
-                  backgroundColor: theme.scaffoldBackgroundColor,
-                  foregroundColor: theme.colorScheme.onSurface,
-                  elevation: 0,
-                ),
-          drawer: isWeb
-              ? null
-              : Drawer(
-                  backgroundColor: theme.scaffoldBackgroundColor,
-                  child: SafeArea(
-                    child: Column(
-                      children: [
-                        const SizedBox(height: 24),
-                        _SidebarItem(
-                          icon: FontAwesomeIcons.house,
-                          label: 'Home',
-                          selected: _selectedIndex == 0,
-                          onTap: () {
-                            Navigator.pop(context);
-                            _onItemTapped(HomeTab.dashboard);
-                          },
-                        ),
-                        _SidebarItem(
-                          icon: FontAwesomeIcons.gear,
-                          label: 'Settings',
-                          selected: _selectedIndex == HomeTab.settings.index,
-                          onTap: () {
-                            Navigator.pop(context);
-                            _onItemTapped(HomeTab.settings);
-                          },
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
+          appBar: null,
+          drawer: null,
           body: Row(
             children: [
               if (isWeb)
@@ -493,9 +449,31 @@ class _HomeDashboardPageState extends State<HomeDashboardPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final size = MediaQuery.of(context).size;
+    final isWeb = size.width > 900;
 
     return Scaffold(
       backgroundColor: Colors.transparent,
+      appBar: isWeb
+          ? null
+          : AppBar(
+              centerTitle: true,
+              title: Padding(
+                padding: const EdgeInsets.only(top: 16.0),
+                child: Text(
+                  'Vision - Max',
+                  style: GoogleFonts.poppins(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w600,
+                    color: theme.colorScheme.onPrimary,
+                    letterSpacing: 2,
+                  ),
+                ),
+              ),
+              backgroundColor: theme.scaffoldBackgroundColor,
+              foregroundColor: theme.colorScheme.onSurface,
+              elevation: 0,
+            ),
       body: SafeArea(
         child: Center(
           child: ConstrainedBox(

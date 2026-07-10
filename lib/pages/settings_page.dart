@@ -83,9 +83,32 @@ class _SettingsPageState extends State<SettingsPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+    final size = MediaQuery.of(context).size;
+    final isWeb = size.width > 900;
 
     return Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor,
+      appBar: isWeb
+        ? null
+        : AppBar(
+            centerTitle: true,
+            title: Padding(
+              padding: const EdgeInsets.only(top: 16.0),
+              child: Text(
+                'Settings',
+                style: GoogleFonts.poppins(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w600,
+                  color: theme.colorScheme.onPrimary,
+                  letterSpacing: 2,
+                ),
+              ),
+            ),
+            backgroundColor: theme.scaffoldBackgroundColor,
+            foregroundColor: theme.colorScheme.onSurface,
+            elevation: 0,
+          ),
+      drawer: null,
       body: SafeArea(
         child: Center(
           child: ConstrainedBox(
@@ -93,16 +116,6 @@ class _SettingsPageState extends State<SettingsPage> {
             child: ListView(
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
               children: [
-                Text(
-                  'Settings',
-                  style: GoogleFonts.poppins(
-                    fontSize: 28,
-                    fontWeight: FontWeight.bold,
-                    color: theme.colorScheme.onSurface,
-                  ),
-                ),
-                const SizedBox(height: 32),
-
                 // Appearance section
                 _SectionLabel('Appearance'),
                 const SizedBox(height: 12),
