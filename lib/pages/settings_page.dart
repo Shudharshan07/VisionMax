@@ -5,6 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:visionmax/themes/theme_cubit.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:hive/hive.dart';
+import 'package:vibration/vibration.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -15,6 +16,7 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   final FlutterTts _tts = FlutterTts();
+  late final Future<void> _ttsReady;
 
   double _speechRate = 0.5;
   double _pitch = 1.0;
@@ -25,7 +27,7 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   void initState() {
     super.initState();
-    _loadSettings();
+    _ttsReady = _loadSettings();
   }
 
   Future<void> _loadSettings() async {
@@ -59,11 +61,40 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Future<void> _applyTtsSettings() async {
     try {
+      await _tts.setLanguage('en-US');
       await _tts.setSpeechRate(_speechRate);
       await _tts.setPitch(_pitch);
       await _tts.setVolume(_volume);
+      await _tts.awaitSpeakCompletion(false);
     } catch (e) {
       debugPrint('Error applying TTS settings: $e');
+    }
+  }
+
+  Future<void> _speakTest() async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await _ttsReady;
+      await _applyTtsSettings();
+      await _tts.speak('This is a test announcement.');
+    } catch (e) {
+      debugPrint('Error testing TTS: $e');
+      if (mounted) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Unable to play TTS test.')),
+        );
+      }
+    }
+  }
+
+  Future<void> _testHapticFeedback() async {
+    try {
+      final hasVibrator = await Vibration.hasVibrator();
+      if (hasVibrator) {
+        await Vibration.vibrate(duration: 80);
+      }
+    } catch (e) {
+      debugPrint('Error testing haptic feedback: $e');
     }
   }
 
@@ -77,6 +108,12 @@ class _SettingsPageState extends State<SettingsPage> {
     });
     await _applyTtsSettings();
     await _saveSettings();
+  }
+
+  @override
+  void dispose() {
+    _tts.stop();
+    super.dispose();
   }
 
   @override
@@ -203,8 +240,12 @@ class _SettingsPageState extends State<SettingsPage> {
                   trailing: Switch(
                     value: _isHapticFeedback,
                     activeThumbColor: theme.colorScheme.primary,
-                    onChanged: (value) {
+                    onChanged: (value) async {
                       setState(() => _isHapticFeedback = value);
+                      await _saveSettings();
+                      if (value) {
+                        await _testHapticFeedback();
+                      }
                     },
                   ),
                 ),
@@ -222,9 +263,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     Icons.play_arrow_rounded,
                     color: theme.colorScheme.onSurface.withOpacityValue(0.4),
                   ),
-                  onTap: () {
-                    _tts.speak('This is a test announcement.');
-                  },
+                  onTap: _speakTest,
                 ),
                 _SettingsTile(
                   icon: Icons.restart_alt_rounded,

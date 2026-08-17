@@ -6,6 +6,8 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:hive/hive.dart';
+import 'package:vibration/vibration.dart';
 import 'package:visionmax/core/object_detector_service.dart';
 import 'dart:io' show Platform;
 
@@ -26,11 +28,12 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   int get _selectedIndex => _selectedTab.index;
 
   late List<AnimationController> _animationControllers;
-  List<Widget> get _pages => [const HomeDashboardPage(), const SettingsPage()];
+  late final List<Widget> _pages;
 
   @override
   void initState() {
     super.initState();
+    _pages = const [HomeDashboardPage(), SettingsPage()];
     // Only create controllers for the actual number of tabs
     _animationControllers = List.generate(HomeTab.values.length, (index) {
       return AnimationController(
@@ -58,6 +61,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     _animationControllers[prevIndex].reverse();
     _animationControllers[_selectedIndex].forward();
   }
+
 
   @override
   Widget build(BuildContext context) {
@@ -158,12 +162,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                           ),
                         ),
                       ),
-                    AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 300),
-                      child: KeyedSubtree(
-                        key: ValueKey<int>(_selectedIndex),
-                        child: _pages[_selectedIndex],
-                      ),
+                    IndexedStack(
+                      index: _selectedIndex,
+                      children: _pages,
                     ),
                   ],
                 ),
@@ -290,10 +291,18 @@ class _HomeDashboardPageState extends State<HomeDashboardPage> {
   Future<void> _initTts() async {
     _flutterTts = FlutterTts();
     try {
+      final box = Hive.box('settings');
       await _flutterTts.setLanguage("en-US");
-      await _flutterTts.setSpeechRate(0.5);
-      await _flutterTts.setVolume(1.0);
-      await _flutterTts.setPitch(1.0);
+      await _flutterTts.setSpeechRate(
+        (box.get('speechRate', defaultValue: 0.5) as num).toDouble(),
+      );
+      await _flutterTts.setVolume(
+        (box.get('volume', defaultValue: 1.0) as num).toDouble(),
+      );
+      await _flutterTts.setPitch(
+        (box.get('pitch', defaultValue: 1.0) as num).toDouble(),
+      );
+      await _flutterTts.awaitSpeakCompletion(false);
     } catch (e) {
       debugPrint('Error initializing TTS: $e');
     }
@@ -432,17 +441,40 @@ class _HomeDashboardPageState extends State<HomeDashboardPage> {
 
   Future<void> _speakInstruction(String text) async {
     final now = DateTime.now();
-    // Throttle voice announcements to avoid overlap/noise
+    final box = Hive.box('settings');
+    final alertCooldown = (box.get('alertCooldown', defaultValue: 2.0) as num).toDouble();
+    // Throttle alerts to avoid overlap/noise
     if (_lastSpokenInstruction == text &&
-        now.difference(_lastSpokenTime) < const Duration(seconds: 3)) {
+        now.difference(_lastSpokenTime) < Duration(milliseconds: (alertCooldown * 1000).round())) {
       return;
     }
     _lastSpokenInstruction = text;
     _lastSpokenTime = now;
     try {
+      await _triggerHapticFeedback(text);
       await _flutterTts.speak(text);
     } catch (e) {
       debugPrint('TTS speak error: $e');
+    }
+  }
+
+
+  Future<void> _triggerHapticFeedback(String text) async {
+    try {
+      final box = Hive.box('settings');
+      final isEnabled = box.get('isHapticFeedback', defaultValue: true) as bool;
+      if (!isEnabled || text == 'Clear path ahead') return;
+
+      final hasVibrator = await Vibration.hasVibrator();
+      if (!hasVibrator) return;
+
+      if (text.startsWith('Stop')) {
+        await Vibration.vibrate(pattern: [0, 120, 80, 120]);
+      } else {
+        await Vibration.vibrate(duration: 80);
+      }
+    } catch (e) {
+      debugPrint('Haptic feedback error: $e');
     }
   }
 
@@ -565,6 +597,7 @@ class _DashboardCard extends StatelessWidget {
     required this.onTap,
   });
 
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -641,6 +674,7 @@ class _SidebarItem extends StatelessWidget {
     required this.selected,
     required this.onTap,
   });
+
 
   @override
   Widget build(BuildContext context) {
