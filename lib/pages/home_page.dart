@@ -29,11 +29,18 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   late List<AnimationController> _animationControllers;
   late final List<Widget> _pages;
+  final GlobalKey<HomeDashboardPageState> _dashboardKey =
+      GlobalKey<HomeDashboardPageState>();
+  final GlobalKey<SettingsPageState> _settingsKey =
+      GlobalKey<SettingsPageState>();
 
   @override
   void initState() {
     super.initState();
-    _pages = const [HomeDashboardPage(), SettingsPage()];
+    _pages = [
+      HomeDashboardPage(key: _dashboardKey),
+      SettingsPage(key: _settingsKey),
+    ];
     // Only create controllers for the actual number of tabs
     _animationControllers = List.generate(HomeTab.values.length, (index) {
       return AnimationController(
@@ -60,6 +67,15 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     });
     _animationControllers[prevIndex].reverse();
     _animationControllers[_selectedIndex].forward();
+
+    if (tab == HomeTab.dashboard) {
+      _dashboardKey.currentState?.refreshTtsSettings();
+    }
+    if (tab == HomeTab.settings) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _settingsKey.currentState?.reloadFromDisk();
+      });
+    }
   }
 
 
@@ -264,21 +280,27 @@ class HomeDashboardPage extends StatefulWidget {
   const HomeDashboardPage({super.key});
 
   @override
-  State<HomeDashboardPage> createState() => _HomeDashboardPageState();
+  State<HomeDashboardPage> createState() => HomeDashboardPageState();
 }
 
-class _HomeDashboardPageState extends State<HomeDashboardPage> {
+class HomeDashboardPageState extends State<HomeDashboardPage> {
   CameraController? _cameraController;
   late final ObjectDetectorService _detectorService;
   late final FlutterTts _flutterTts;
 
   bool _isCameraInitialized = false;
+  bool _isTtsInitialized = false;
   bool _isScanning = false;
   bool _isProcessingFrame = false;
 
   String _detectionInstruction = 'Ready';
+  ProximityLevel _currentProximity = ProximityLevel.safe;
+  ScreenRegion _currentRegion = ScreenRegion.center;
+  bool _currentIsCritical = false;
+
   String _lastSpokenInstruction = '';
   DateTime _lastSpokenTime = DateTime.now().subtract(const Duration(seconds: 10));
+  DateTime _lastNonCriticalSpokenTime = DateTime.now().subtract(const Duration(seconds: 10));
 
   @override
   void initState() {
@@ -291,20 +313,77 @@ class _HomeDashboardPageState extends State<HomeDashboardPage> {
   Future<void> _initTts() async {
     _flutterTts = FlutterTts();
     try {
-      final box = Hive.box('settings');
+      double speechRate = 0.5;
+      double volume = 1.0;
+      double pitch = 1.0;
+      try {
+        final box = Hive.box('settings');
+        speechRate =
+            (box.get('speechRate', defaultValue: 0.5) as num).toDouble();
+        volume =
+            (box.get('volume', defaultValue: 1.0) as num).toDouble();
+        pitch = (box.get('pitch', defaultValue: 1.0) as num).toDouble();
+      } catch (e) {
+        debugPrint('Hive read failed during TTS init (using defaults): $e');
+      }
+
+      if (Platform.isAndroid) {
+        try {
+          await _flutterTts.isLanguageInstalled("en-US");
+        } catch (_) {}
+      }
+
       await _flutterTts.setLanguage("en-US");
-      await _flutterTts.setSpeechRate(
-        (box.get('speechRate', defaultValue: 0.5) as num).toDouble(),
-      );
-      await _flutterTts.setVolume(
-        (box.get('volume', defaultValue: 1.0) as num).toDouble(),
-      );
-      await _flutterTts.setPitch(
-        (box.get('pitch', defaultValue: 1.0) as num).toDouble(),
-      );
+      await _flutterTts.setSpeechRate(speechRate);
+      await _flutterTts.setVolume(volume);
+      await _flutterTts.setPitch(pitch);
       await _flutterTts.awaitSpeakCompletion(false);
+
+      if (Platform.isAndroid) {
+        try {
+          await _flutterTts.speak("");
+        } catch (_) {}
+      }
+
+      debugPrint('[VisionMax] TTS initialized. rate=$speechRate vol=$volume pitch=$pitch');
+
+      if (mounted) {
+        setState(() {
+          _isTtsInitialized = true;
+        });
+      }
     } catch (e) {
-      debugPrint('Error initializing TTS: $e');
+      debugPrint('[VisionMax] Error initializing TTS: $e');
+      if (mounted) {
+        setState(() {
+          _isTtsInitialized = true;
+        });
+      }
+    }
+  }
+
+  Future<void> refreshTtsSettings() async {
+    try {
+      double speechRate = 0.5;
+      double volume = 1.0;
+      double pitch = 1.0;
+      try {
+        final box = Hive.box('settings');
+        speechRate =
+            (box.get('speechRate', defaultValue: 0.5) as num?)?.toDouble() ??
+                0.5;
+        volume =
+            (box.get('volume', defaultValue: 1.0) as num?)?.toDouble() ?? 1.0;
+        pitch = (box.get('pitch', defaultValue: 1.0) as num?)?.toDouble() ?? 1.0;
+      } catch (e) {
+        debugPrint('[VisionMax] Hive read failed in refreshTtsSettings: $e');
+      }
+      await _flutterTts.setSpeechRate(speechRate);
+      await _flutterTts.setVolume(volume);
+      await _flutterTts.setPitch(pitch);
+      debugPrint('[VisionMax] TTS refreshed: r=$speechRate v=$volume p=$pitch');
+    } catch (e) {
+      debugPrint('[VisionMax] Error refreshing TTS settings: $e');
     }
   }
 
@@ -369,31 +448,94 @@ class _HomeDashboardPageState extends State<HomeDashboardPage> {
     }
   }
 
-  void _startScanning() async {
+  void _showMessage(String text, {Duration duration = const Duration(seconds: 1), bool long = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(text),
+        duration: long ? const Duration(seconds: 3) : duration,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  Future<void> _startScanning() async {
+    debugPrint('[VisionMax] _startScanning called');
+    if (!_isTtsInitialized) {
+      debugPrint('[VisionMax] TTS not ready; waiting 500ms');
+      await Future.delayed(const Duration(milliseconds: 500));
+    }
     if (_cameraController == null || !_isCameraInitialized) {
+      debugPrint('[VisionMax] Camera not ready; initializing');
       await _initializeCamera();
     }
     if (_cameraController == null || !_cameraController!.value.isInitialized) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Camera not ready. Check permissions.')),
-        );
-      }
+      debugPrint('[VisionMax] Camera failed to initialize');
+      _showMessage('Camera not ready. Check app permissions.', long: true);
       return;
     }
 
     setState(() {
       _isScanning = true;
-      _detectionInstruction = 'Ready';
+      _detectionInstruction = 'Starting scanner...';
+      _currentProximity = ProximityLevel.safe;
+      _currentRegion = ScreenRegion.center;
+      _currentIsCritical = false;
+      _lastSpokenInstruction = '';
+      _lastSpokenTime = DateTime.now().subtract(const Duration(seconds: 10));
+      _lastNonCriticalSpokenTime = DateTime.now().subtract(const Duration(seconds: 10));
     });
+
+    _showMessage('Scanning started');
+    debugPrint('[VisionMax] Starting image stream');
+
+    // Prime haptic + TTS with explicit startup announcement
+    try {
+      final hasV = await Vibration.hasVibrator();
+      debugPrint('[VisionMax] hasVibrator=$hasV');
+    } catch (e) {
+      debugPrint('[VisionMax] vibrator probe error: $e');
+    }
+
+    _speakAlert(
+      'Scanning started. Monitoring path ahead.',
+      isCritical: false,
+      proximity: ProximityLevel.caution,
+      bypassCooldown: true,
+    );
 
     try {
       await _cameraController!.startImageStream((CameraImage image) async {
         if (!_isScanning || _isProcessingFrame) return;
         _isProcessingFrame = true;
         try {
+          debugPrint('[VisionMax] frame ${image.width}x${image.height} planes=${image.planes.length}');
+          final safetyResult = _detectorService.runFrameSafetyChecks(image);
+          debugPrint('[VisionMax] safety: status=${safetyResult.status} lum=${safetyResult.luminance.toStringAsFixed(1)} var=${safetyResult.variance.toStringAsFixed(1)}');
+
+          if (safetyResult.status != FrameSafetyStatus.ok &&
+              safetyResult.message != null) {
+            if (mounted && _isScanning) {
+              setState(() {
+                _detectionInstruction = safetyResult.message!;
+                _currentProximity = ProximityLevel.critical;
+                _currentRegion = ScreenRegion.center;
+                _currentIsCritical = true;
+              });
+              _speakAlert(
+                safetyResult.message!,
+                isCritical: true,
+                proximity: ProximityLevel.critical,
+              );
+            }
+            _isProcessingFrame = false;
+            return;
+          }
+
           final detections = await _detectorService.processCameraImage(image);
-          final resultString = _detectorService.analyzeDetections(
+          debugPrint('[VisionMax] detection count: ${detections.length}');
+          final analysis = _detectorService.analyzeDetections(
             detections,
             image.width,
             image.height,
@@ -401,18 +543,27 @@ class _HomeDashboardPageState extends State<HomeDashboardPage> {
 
           if (mounted && _isScanning) {
             setState(() {
-              _detectionInstruction = resultString;
+              _detectionInstruction = analysis.instruction;
+              _currentProximity = analysis.proximity;
+              _currentRegion = analysis.region;
+              _currentIsCritical = analysis.isCritical;
             });
-            _speakInstruction(resultString);
+            _speakAlert(
+              analysis.instruction,
+              isCritical: analysis.isCritical,
+              proximity: analysis.proximity,
+            );
           }
         } catch (e) {
-          debugPrint('Error processing camera frame: $e');
+          debugPrint('[VisionMax] Error processing camera frame: $e');
         } finally {
           _isProcessingFrame = false;
         }
       });
+      debugPrint('[VisionMax] image stream started successfully');
     } catch (e) {
-      debugPrint('Error starting image stream: $e');
+      debugPrint('[VisionMax] Error starting image stream: $e');
+      _showMessage('Failed to start camera stream.', long: true);
       if (mounted) {
         setState(() {
           _isScanning = false;
@@ -421,60 +572,151 @@ class _HomeDashboardPageState extends State<HomeDashboardPage> {
     }
   }
 
-  void _stopScanning() async {
+  Future<void> _stopScanning() async {
+    debugPrint('[VisionMax] _stopScanning called');
     if (_cameraController != null && _isCameraInitialized) {
       try {
         if (_cameraController!.value.isStreamingImages) {
           await _cameraController!.stopImageStream();
+          debugPrint('[VisionMax] image stream stopped');
         }
       } catch (e) {
-        debugPrint('Error stopping image stream: $e');
+        debugPrint('[VisionMax] Error stopping image stream: $e');
       }
     }
+    _showMessage('Scanning stopped');
+    _speakAlert(
+      'Scanning stopped.',
+      isCritical: false,
+      proximity: ProximityLevel.caution,
+      bypassCooldown: true,
+    );
     if (mounted) {
       setState(() {
         _isScanning = false;
         _detectionInstruction = 'Ready';
+        _currentProximity = ProximityLevel.safe;
+        _currentRegion = ScreenRegion.center;
+        _currentIsCritical = false;
       });
     }
   }
 
-  Future<void> _speakInstruction(String text) async {
+  Future<void> _speakAlert(
+    String text, {
+    required bool isCritical,
+    required ProximityLevel proximity,
+    bool bypassCooldown = false,
+  }) async {
     final now = DateTime.now();
-    final box = Hive.box('settings');
-    final alertCooldown = (box.get('alertCooldown', defaultValue: 2.0) as num).toDouble();
-    // Throttle alerts to avoid overlap/noise
-    if (_lastSpokenInstruction == text &&
-        now.difference(_lastSpokenTime) < Duration(milliseconds: (alertCooldown * 1000).round())) {
-      return;
+    double alertCooldown = 2.0;
+    try {
+      final box = Hive.box('settings');
+      alertCooldown =
+          (box.get('alertCooldown', defaultValue: 2.0) as num).toDouble();
+    } catch (e) {
+      debugPrint('[VisionMax] Hive box read error in _speakAlert: $e');
     }
+
+    debugPrint('[VisionMax] speakAlert: "$text" crit=$isCritical prox=$proximity cd=$alertCooldown');
+
+    final cooldownDuration = Duration(milliseconds: (alertCooldown * 1000).round());
+
+    if (!isCritical && !bypassCooldown) {
+      final timeSinceLastNonCritical = now.difference(_lastNonCriticalSpokenTime);
+      if (timeSinceLastNonCritical < cooldownDuration) {
+        debugPrint('[VisionMax] suppressed by cooldown (time since last non-critical: ${timeSinceLastNonCritical.inMilliseconds}ms < ${cooldownDuration.inMilliseconds}ms)');
+        return;
+      }
+      if (_lastSpokenInstruction == text &&
+          now.difference(_lastSpokenTime) < cooldownDuration * 2) {
+        debugPrint('[VisionMax] suppressed exact duplicate');
+        return;
+      }
+    }
+
     _lastSpokenInstruction = text;
     _lastSpokenTime = now;
+    if (!isCritical) {
+      _lastNonCriticalSpokenTime = now;
+    }
     try {
-      await _triggerHapticFeedback(text);
-      await _flutterTts.speak(text);
+      await _triggerHapticFeedback(proximity: proximity);
+      if (isCritical) {
+        try {
+          await _flutterTts.stop();
+        } catch (_) {}
+      }
+      if (!_isTtsInitialized) {
+        debugPrint('[VisionMax] TTS still not ready; waiting 200ms');
+        await Future.delayed(const Duration(milliseconds: 200));
+      }
+      final ttsResult = await _flutterTts.speak(text);
+      debugPrint('[VisionMax] flutterTts.speak result: $ttsResult');
     } catch (e) {
-      debugPrint('TTS speak error: $e');
+      debugPrint('[VisionMax] TTS speak error: $e');
     }
   }
 
-
-  Future<void> _triggerHapticFeedback(String text) async {
+  Future<void> _triggerHapticFeedback(
+      {required ProximityLevel proximity}) async {
     try {
-      final box = Hive.box('settings');
-      final isEnabled = box.get('isHapticFeedback', defaultValue: true) as bool;
-      if (!isEnabled || text == 'Clear path ahead') return;
+      bool isEnabled = true;
+      try {
+        final box = Hive.box('settings');
+        isEnabled =
+            box.get('isHapticFeedback', defaultValue: true) as bool;
+      } catch (e) {
+        debugPrint('[VisionMax] Hive haptic read error: $e');
+      }
+      if (!isEnabled) {
+        debugPrint('[VisionMax] haptic disabled by setting');
+        return;
+      }
+      if (proximity == ProximityLevel.safe) return;
 
       final hasVibrator = await Vibration.hasVibrator();
-      if (!hasVibrator) return;
+      if (!hasVibrator) {
+        debugPrint('[VisionMax] no vibrator available');
+        return;
+      }
 
-      if (text.startsWith('Stop')) {
-        await Vibration.vibrate(pattern: [0, 120, 80, 120]);
+      bool hasAmplitude = false;
+      try {
+        hasAmplitude = await Vibration.hasAmplitudeControl();
+      } catch (_) {}
+
+      if (proximity == ProximityLevel.critical) {
+        if (hasAmplitude && Platform.isAndroid) {
+          await Vibration.vibrate(
+            pattern: [0, 150, 60, 150, 60, 150],
+            intensities: [0, 255, 0, 255, 0, 255],
+          );
+        } else {
+          await Vibration.vibrate(pattern: [0, 150, 60, 150, 60, 150]);
+        }
+        debugPrint('[VisionMax] critical haptic fired');
       } else {
-        await Vibration.vibrate(duration: 80);
+        if (hasAmplitude && Platform.isAndroid) {
+          await Vibration.vibrate(duration: 100, amplitude: 200);
+        } else {
+          await Vibration.vibrate(duration: 100);
+        }
+        debugPrint('[VisionMax] caution haptic fired');
       }
     } catch (e) {
-      debugPrint('Haptic feedback error: $e');
+      debugPrint('[VisionMax] Haptic feedback error: $e');
+    }
+  }
+
+  String _regionLabel(ScreenRegion region) {
+    switch (region) {
+      case ScreenRegion.left:
+        return 'Left';
+      case ScreenRegion.center:
+        return 'Center';
+      case ScreenRegion.right:
+        return 'Right';
     }
   }
 
@@ -531,7 +773,9 @@ class _HomeDashboardPageState extends State<HomeDashboardPage> {
                       _DashboardCard(
                         title: 'Camera Status',
                         status: _isScanning ? 'Active' : 'Inactive',
-                        subtitle: 'Tap to start',
+                        subtitle: _isCameraInitialized
+                            ? (_isScanning ? 'Monitoring path' : 'Tap to start scanning')
+                            : 'Initializing camera...',
                         onTap: _toggleScanning,
                       ),
                       
@@ -539,13 +783,29 @@ class _HomeDashboardPageState extends State<HomeDashboardPage> {
                       
                       _DashboardCard(
                         title: 'Detection',
-                        status: 'TTS ready',
-                        subtitle: _isScanning ? _detectionInstruction : 'Ready',
+                        status: _currentIsCritical
+                            ? 'Critical Alert'
+                            : (_currentProximity == ProximityLevel.caution
+                                ? 'Caution'
+                                : (_isScanning ? 'Monitoring' : 'TTS ready')),
+                        subtitle: _isScanning
+                            ? '${_regionLabel(_currentRegion)} - $_detectionInstruction'
+                            : (_isTtsInitialized ? 'Tap Start to begin' : 'Initializing voice...'),
                         onTap: () {
                           if (_isScanning) {
-                            _speakInstruction(_detectionInstruction);
+                            _speakAlert(
+                              _detectionInstruction,
+                              isCritical: _currentIsCritical,
+                              proximity: _currentProximity,
+                              bypassCooldown: true,
+                            );
                           } else {
-                            _speakInstruction('Ready');
+                            _speakAlert(
+                              'Ready. Tap Start Scanning to begin monitoring.',
+                              isCritical: false,
+                              proximity: ProximityLevel.caution,
+                              bypassCooldown: true,
+                            );
                           }
                         },
                       ),

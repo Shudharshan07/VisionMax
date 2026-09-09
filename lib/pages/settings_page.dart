@@ -11,10 +11,10 @@ class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
 
   @override
-  State<SettingsPage> createState() => _SettingsPageState();
+  State<SettingsPage> createState() => SettingsPageState();
 }
 
-class _SettingsPageState extends State<SettingsPage> {
+class SettingsPageState extends State<SettingsPage> {
   final FlutterTts _tts = FlutterTts();
   late final Future<void> _ttsReady;
 
@@ -27,22 +27,29 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   void initState() {
     super.initState();
-    _ttsReady = _loadSettings();
+    _ttsReady = reloadFromDisk();
   }
 
-  Future<void> _loadSettings() async {
+  Future<void> reloadFromDisk() async {
     try {
       final box = Hive.box('settings');
       setState(() {
-        _speechRate = (box.get('speechRate', defaultValue: 0.5) as num).toDouble();
-        _pitch = (box.get('pitch', defaultValue: 1.0) as num).toDouble();
-        _volume = (box.get('volume', defaultValue: 1.0) as num).toDouble();
-        _alertCooldown = (box.get('alertCooldown', defaultValue: 2.0) as num).toDouble();
-        _isHapticFeedback = box.get('isHapticFeedback', defaultValue: true) as bool;
+        _speechRate =
+            (box.get('speechRate', defaultValue: 0.5) as num?)?.toDouble() ??
+                0.5;
+        _pitch = (box.get('pitch', defaultValue: 1.0) as num?)?.toDouble() ??
+            1.0;
+        _volume =
+            (box.get('volume', defaultValue: 1.0) as num?)?.toDouble() ?? 1.0;
+        _alertCooldown =
+            (box.get('alertCooldown', defaultValue: 2.0) as num?)?.toDouble() ??
+                2.0;
+        _isHapticFeedback =
+            box.get('isHapticFeedback', defaultValue: true) as bool? ?? true;
       });
       await _applyTtsSettings();
     } catch (e) {
-      debugPrint('Error loading settings: $e');
+      debugPrint('[VisionMax] Error loading settings: $e');
     }
   }
 
@@ -54,8 +61,32 @@ class _SettingsPageState extends State<SettingsPage> {
       await box.put('volume', _volume);
       await box.put('alertCooldown', _alertCooldown);
       await box.put('isHapticFeedback', _isHapticFeedback);
+      await _applyTtsSettings();
+      debugPrint(
+          '[VisionMax] Settings saved: r=$_speechRate p=$_pitch v=$_volume cd=$_alertCooldown haptic=$_isHapticFeedback');
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            const SnackBar(
+              content: Text('Settings saved'),
+              behavior: SnackBarBehavior.floating,
+              duration: Duration(seconds: 1),
+            ),
+          );
+      }
     } catch (e) {
-      debugPrint('Error saving settings: $e');
+      debugPrint('[VisionMax] Error saving settings: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            const SnackBar(
+              content: Text('Failed to save settings'),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+      }
     }
   }
 
@@ -90,7 +121,7 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _testHapticFeedback() async {
     try {
       final hasVibrator = await Vibration.hasVibrator();
-      if (hasVibrator) {
+      if (hasVibrator == true) {
         await Vibration.vibrate(duration: 80);
       }
     } catch (e) {
@@ -180,39 +211,42 @@ class _SettingsPageState extends State<SettingsPage> {
                   icon: Icons.speed_rounded,
                   iconColor: Colors.blue,
                   title: 'Speech Rate',
-                  subtitle: _speechRate.toStringAsFixed(1),
+                  subtitle: _speechRate.toStringAsFixed(2),
                   value: _speechRate,
                   min: 0.1,
                   max: 1.0,
+                  divisions: 9,
+                  step: 0.1,
                   onChanged: (value) {
                     setState(() => _speechRate = value);
-                    _applyTtsSettings();
                   },
                 ),
                 _SettingsSliderTile(
                   icon: Icons.tune_rounded,
                   iconColor: Colors.deepPurple,
                   title: 'Pitch',
-                  subtitle: _pitch.toStringAsFixed(1),
+                  subtitle: _pitch.toStringAsFixed(2),
                   value: _pitch,
                   min: 0.5,
                   max: 2.0,
+                  divisions: 15,
+                  step: 0.1,
                   onChanged: (value) {
                     setState(() => _pitch = value);
-                    _applyTtsSettings();
                   },
                 ),
                 _SettingsSliderTile(
                   icon: Icons.volume_up_rounded,
                   iconColor: Colors.green,
                   title: 'Volume',
-                  subtitle: _volume.toStringAsFixed(1),
+                  subtitle: _volume.toStringAsFixed(2),
                   value: _volume,
                   min: 0.0,
                   max: 1.0,
+                  divisions: 10,
+                  step: 0.1,
                   onChanged: (value) {
                     setState(() => _volume = value);
-                    _applyTtsSettings();
                   },
                 ),
                 const SizedBox(height: 24),
@@ -224,10 +258,12 @@ class _SettingsPageState extends State<SettingsPage> {
                   icon: Icons.timer_rounded,
                   iconColor: Colors.orange,
                   title: 'Alert Cooldown',
-                  subtitle: '${_alertCooldown.toStringAsFixed(1)}s',
+                  subtitle: '${_alertCooldown.toStringAsFixed(2)}s',
                   value: _alertCooldown,
                   min: 1.0,
                   max: 5.0,
+                  divisions: 40,
+                  step: 0.1,
                   onChanged: (value) {
                     setState(() => _alertCooldown = value);
                   },
@@ -242,7 +278,6 @@ class _SettingsPageState extends State<SettingsPage> {
                     activeThumbColor: theme.colorScheme.primary,
                     onChanged: (value) async {
                       setState(() => _isHapticFeedback = value);
-                      await _saveSettings();
                       if (value) {
                         await _testHapticFeedback();
                       }
@@ -437,6 +472,8 @@ class _SettingsSliderTile extends StatelessWidget {
   final double value;
   final double min;
   final double max;
+  final int? divisions;
+  final double step;
   final ValueChanged<double> onChanged;
 
   const _SettingsSliderTile({
@@ -447,8 +484,16 @@ class _SettingsSliderTile extends StatelessWidget {
     required this.value,
     required this.min,
     required this.max,
+    this.divisions,
+    this.step = 0.1,
     required this.onChanged,
   });
+
+  double _snap(double raw) {
+    if (step <= 0) return raw;
+    final snapped = ((raw - min) / step).round() * step + min;
+    return snapped.clamp(min, max);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -517,11 +562,11 @@ class _SettingsSliderTile extends StatelessWidget {
                 trackHeight: 4,
               ),
               child: Slider(
-                value: value,
+                value: _snap(value),
                 min: min,
                 max: max,
-                divisions: 10,
-                onChanged: onChanged,
+                divisions: divisions,
+                onChanged: (raw) => onChanged(_snap(raw)),
               ),
             ),
           ],
